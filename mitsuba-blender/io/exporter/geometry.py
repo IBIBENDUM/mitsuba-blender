@@ -120,14 +120,12 @@ def export_object(deg_instance, export_ctx, is_particle):
         # Convert the mesh into one mitsuba mesh per different material
         mat_count = len(b_mesh.materials)
         converted_parts = []
-        if is_instance or is_instance_emitter:
-            transform = None
-        else:
-            transform = b_object.matrix_world
+        # Always export mesh in local coordinates
+        transform = None
 
 
         if mat_count == 0: # No assigned material
-            mts_mesh = convert_mesh(export_ctx, b_mesh, transform, name_clean, 0)
+            mts_mesh = convert_mesh(export_ctx, b_mesh, None, name_clean, 0)
             if mts_mesh is not None and mts_mesh.face_count() > 0:
                 converted_parts.append((name_clean, -1, mts_mesh))
         else:
@@ -147,7 +145,7 @@ def export_object(deg_instance, export_ctx, is_particle):
 
                 mts_mesh = convert_mesh(export_ctx,
                                         b_mesh,
-                                        transform,
+                                        None,  # Always local coordinates
                                         name,
                                         mat_nr)
                 if mts_mesh is not None and mts_mesh.face_count() > 0:
@@ -208,6 +206,10 @@ def export_object(deg_instance, export_ctx, is_particle):
                     params['emitter'] = mixed_mat['emitter']
                 else:
                     params['bsdf'] = {'type':'ref', 'id':mat_id}
+
+            # Add world transform to Mitsuba XML (not to .ply)
+            if not (is_instance or is_instance_emitter):
+                params['to_world'] = export_ctx.transform_matrix(b_object.matrix_world)
 
             # Add dict to the scene dict
             if use_shapegroup:
