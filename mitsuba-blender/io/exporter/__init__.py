@@ -42,6 +42,7 @@ class SceneConverter:
                                        split_files=split_files)
         # Give the path to the export context, for saving meshes and files
         self.export_ctx.directory, _ = os.path.split(name)
+        self.export_ctx.output_path = name
 
     def scene_to_dict(self, depsgraph, window_manager):
         # Switch to object mode before exporting stuff, so everything is defined properly
@@ -106,6 +107,7 @@ class SceneConverter:
 
     def dict_to_xml(self):
         self.xml_writer.process(self.export_ctx.scene_data)
+        self.export_ctx.write_debug_log()
 
     def dict_to_scene(self):
         from mitsuba import load_dict

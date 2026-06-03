@@ -69,10 +69,12 @@ class ExportContext:
         self.exported_mats = ExportedMaterialsCache()
         self.export_ids = False # Export Object IDs in the XML file
         self.exported_ids = set()
+        self.debug_messages = []
         # All the args defined below are set in the Converter
         self.directory = ''
         self.axis_mat = Matrix() # Coordinate shift
         self.deg = None # Dependency graph
+        self.output_path = ''
         self.subfolders = {
             'texture': 'textures',
             'emitter': 'textures',
@@ -129,6 +131,24 @@ class ExportContext:
         if level not in log_level:
             raise ValueError("Invalid logging level '%s'!" % level)
         Log(log_level[level], message)
+
+    def debug(self, message):
+        formatted = f"[mitsuba-blender debug] {message}"
+        print(formatted, flush=True)
+        self.debug_messages.append(formatted)
+        if self.output_path:
+            debug_path = f"{self.output_path}.debug.log"
+            with open(debug_path, "a", encoding="utf-8") as debug_file:
+                debug_file.write(formatted)
+                debug_file.write("\n")
+
+    def write_debug_log(self):
+        if not self.output_path or not self.debug_messages:
+            return
+        debug_path = f"{self.output_path}.debug.log"
+        with open(debug_path, "w", encoding="utf-8") as debug_file:
+            debug_file.write("\n".join(self.debug_messages))
+            debug_file.write("\n")
 
     def export_texture(self, image):
         """

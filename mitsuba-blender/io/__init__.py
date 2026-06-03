@@ -112,6 +112,11 @@ class ExportMitsuba(bpy.types.Operator, ExportHelper):
         self.converter = exporter.SceneConverter()
 
     def execute(self, context):
+        print(f"[mitsuba-blender debug] GUI export operator loaded from {__file__}", flush=True)
+        debug_path = f"{self.filepath}.debug.log"
+        with open(debug_path, "w", encoding="utf-8") as debug_file:
+            debug_file.write(f"[mitsuba-blender debug] GUI execute started from {__file__}\n")
+            debug_file.write(f"[mitsuba-blender debug] GUI export output path {self.filepath}\n")
         # Conversion matrix to shift the "Up" Vector. This can be useful when exporting single objects to an existing mitsuba scene.
         axis_mat = axis_conversion(
 	            to_forward=self.axis_forward,
@@ -126,6 +131,8 @@ class ExportMitsuba(bpy.types.Operator, ExportHelper):
 
         # Set path to scene .xml file
         self.converter.set_path(self.filepath, split_files=self.split_files)
+        self.converter.export_ctx.debug(f"GUI export operator loaded from {__file__}")
+        self.converter.export_ctx.debug(f"GUI export output path {self.filepath}")
 
         window_manager = context.window_manager
 
@@ -139,6 +146,12 @@ class ExportMitsuba(bpy.types.Operator, ExportHelper):
         self.converter.dict_to_xml()
 
         window_manager.progress_end()
+
+        debug_messages = getattr(self.converter.export_ctx, "debug_messages", [])
+        if debug_messages:
+            for message in debug_messages[-20:]:
+                self.report({'INFO'}, message)
+            self.report({'INFO'}, f"Mitsuba debug log: {self.filepath}.debug.log")
 
         self.report({'INFO'}, "Scene exported successfully!")
 

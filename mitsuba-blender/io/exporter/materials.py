@@ -6,6 +6,13 @@ from .export_context import Files
 RoughnessMode = {'GGX': 'ggx', 'BECKMANN': 'beckmann', 'ASHIKHMIN_SHIRLEY':'beckmann', 'MULTI_GGX':'ggx'}
 #TODO: update when other distributions are supported
 
+
+def _debug_material(export_ctx, message):
+    if hasattr(export_ctx, "debug"):
+        export_ctx.debug(f"[materials] {message}")
+    else:
+        print(f"[mitsuba-blender debug] [materials] {message}", flush=True)
+
 def export_texture_node(export_ctx, tex_node):
     params = {
         'type':'bitmap'
@@ -72,6 +79,66 @@ def two_sided_bsdf(bsdf):
              'bsdf': bsdf
     }
     return params
+
+def normalmap_bsdf(bsdf, normalmap):
+    return {
+        'type': 'normalmap',
+        'normalmap': normalmap,
+        'bsdf': bsdf,
+    }
+
+def convert_normal_texture_node(export_ctx, socket):
+    _debug_material(
+        export_ctx,
+        f"convert_normal_texture_node socket={socket.name} linked={socket.is_linked}",
+    )
+    if not socket.is_linked:
+        _debug_material(export_ctx, "normal input is not linked")
+        return None
+
+    node = socket.links[0].from_node
+    _debug_material(export_ctx, f"normal input from_node={node.type} name={getattr(node, 'name', '<unnamed>')}")
+    if node.type == 'NORMAL_MAP':
+        color_socket = node.inputs['Color']
+        _debug_material(
+            export_ctx,
+            f"normal map node color linked={color_socket.is_linked}",
+        )
+        if not color_socket.is_linked:
+            _debug_material(export_ctx, "normal map color is not linked")
+            return None
+        node = color_socket.links[0].from_node
+        _debug_material(export_ctx, f"normal map color source node={node.type} name={getattr(node, 'name', '<unnamed>')}")
+
+    # Direct image texture
+    if node.type == 'TEX_IMAGE':
+        params = export_texture_node(export_ctx, node)
+        params['raw'] = True
+        _debug_material(export_ctx, f"normal input exported as direct image texture filename={params.get('filename')}")
+        return params
+
+    # Support simple Bump node setups where the Height input comes from an image texture.
+    # Note: a height map is not the same as a normal map. We export the image so the user
+    # can post-process or replace it with a proper normal map. Emit a warning to make that clear.
+    if node.type == 'BUMP':
+        height_socket = node.inputs.get('Height')
+        if height_socket is None or not height_socket.is_linked:
+            return None
+        src = height_socket.links[0].from_node
+        if src.type != 'TEX_IMAGE':
+            raise NotImplementedError(
+                "Node type %s is not supported for Bump height. Only image textures are supported." % src.type
+            )
+        export_ctx.log("Exporting Bump node's Height image as normalmap source. Consider using a 'Normal Map' node for proper normal maps.", 'WARN')
+        params = export_texture_node(export_ctx, src)
+        params['raw'] = True
+        params['height'] = True
+        _debug_material(export_ctx, f"normal input exported via bump height filename={params.get('filename')}")
+        return params
+
+    raise NotImplementedError(
+        "Node type %s is not supported. Only image texture normal maps (or simple Bump->Height->Image) are supported for normal inputs" % node.type
+    )
 
 def convert_diffuse_materials_cycles(export_ctx, current_node):
     params = {}
@@ -261,6 +328,7 @@ def convert_mix_materials_cycles(export_ctx, current_node):#TODO: test and fix t
 
 def convert_principled_materials_cycles(export_ctx, current_node):
     params = {}
+    _debug_material(export_ctx, f"convert_principled_materials_cycles node={getattr(current_node, 'name', '<unnamed>')}")
 
     if bpy.app.version >= (4, 0, 0):
         specular_key = 'Specular IOR Level'
@@ -293,6 +361,15 @@ def convert_principled_materials_cycles(export_ctx, current_node):
         sheen_tint = convert_float_texture_node(export_ctx, current_node.inputs['Sheen Tint'])
     clearcoat = convert_float_texture_node(export_ctx, current_node.inputs[clearcoat_key])
     clearcoat_roughness = convert_float_texture_node(export_ctx, current_node.inputs[clearcoat_roughness_key])
+    normalmap = convert_normal_texture_node(export_ctx, current_node.inputs['Normal'])
+    _debug_material(
+        export_ctx,
+        "principled inputs: "
+        f"base_color={type(base_color).__name__} "
+        f"roughness={type(roughness).__name__} "
+        f"metallic={type(metallic).__name__} "
+        f"normalmap={'yes' if normalmap is not None else 'no'}",
+    )
 
     params.update({
         'type': 'principled',
@@ -318,13 +395,19 @@ def convert_principled_materials_cycles(export_ctx, current_node):
             'eta': max(ior, 1+1e-3),
         })
         # Transmissive material should not be twosided
-        return params
+        bsdf = params
     else:
         # Export 'specular' if the material is only reflective
         params.update({
             'specular': max(specular, 1e-3)
         })
-        return two_sided_bsdf(params)
+        bsdf = two_sided_bsdf(params)
+
+    if normalmap is not None:
+        _debug_material(export_ctx, "wrapping principled bsdf in normalmap")
+        return normalmap_bsdf(bsdf, normalmap)
+    _debug_material(export_ctx, "principled bsdf has no normalmap")
+    return bsdf
 
 
 #TODO: Add more support for other materials: refraction, transparent, translucent
@@ -358,6 +441,7 @@ def b_material_to_dict(export_ctx, b_mat):
     ''' Converting one material from Blender / Cycles to Mitsuba'''
 
     mat_params = {}
+    _debug_material(export_ctx, f"exporting material name={b_mat.name} use_nodes={b_mat.use_nodes}")
 
     if b_mat.use_nodes:
         try:
@@ -365,6 +449,10 @@ def b_material_to_dict(export_ctx, b_mat):
             if output_node_id in b_mat.node_tree.nodes:
                 output_node = b_mat.node_tree.nodes[output_node_id]
                 surface_node = output_node.inputs["Surface"].links[0].from_node
+                _debug_material(
+                    export_ctx,
+                    f"material output surface node={surface_node.type} name={getattr(surface_node, 'name', '<unnamed>')}",
+                )
                 mat_params = cycles_material_to_dict(export_ctx, surface_node)
             else:
                 export_ctx.log(f'Export of material {b_mat.name} failed: Cannot find material output node. Exporting a dummy material instead.', 'WARN')
